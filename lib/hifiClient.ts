@@ -1,109 +1,66 @@
 import { z } from 'zod'
 
 export const HiFiTrackSchema = z.object({
-  id: z.string(),
+  id: z.number(),
   title: z.string(),
-  artist: z.string().optional(),
-  album: z.string().optional(),
+  artist: z.any(),
+  artists: z.array(z.any()).optional(),
+  album: z.any(),
   duration: z.number().optional(),
   popularity: z.number().optional(),
-  previewUrl: z.string().optional(),
-  coverUrl: z.string().optional(),
   bpm: z.number().optional(),
   key: z.string().optional(),
   explicit: z.boolean().optional(),
-  isPlayable: z.boolean().optional(),
+  cover: z.string().optional(),
 })
 
 export const HiFiSearchResultSchema = z.object({
-  tracks: z.array(HiFiTrackSchema),
-  total: z.number().optional(),
+  data: z.object({
+    items: z.array(HiFiTrackSchema),
+    totalNumberOfItems: z.number().optional(),
+  })
 })
 
 export const HiFiRecommendationsSchema = z.object({
-  tracks: z.array(HiFiTrackSchema),
+  data: z.object({
+    items: z.array(z.object({
+      track: HiFiTrackSchema,
+    })),
+  })
 })
 
 export const HiFiTrackInfoSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  artist: z.string().optional(),
-  album: z.string().optional(),
-  duration: z.number().optional(),
-  popularity: z.number().optional(),
-  previewUrl: z.string().optional(),
-  coverUrl: z.string().optional(),
-  bpm: z.number().optional(),
-  key: z.string().optional(),
-  explicit: z.boolean().optional(),
-  isPlayable: z.boolean().optional(),
-  artistId: z.string().optional(),
-  albumId: z.string().optional(),
+  data: HiFiTrackSchema,
 })
 
-export type HiFiTrack = z.infer<typeof HiFiTrackSchema>
-export type HiFiSearchResult = z.infer<typeof HiFiSearchResultSchema>
-export type HiFiRecommendations = z.infer<typeof HiFiRecommendationsSchema>
-export type HiFiTrackInfo = z.infer<typeof HiFiTrackInfoSchema>
-
-const BASE_URL = process.env.HIFI_API_BASE_URL || 'https://api.monochrome.tf'
-
-interface FetchOptions extends RequestInit {
-  timeout?: number
+export type HiFiTrack = {
+  id: string
+  title: string
+  artist?: string
+  artists?: Array<{ name: string }>
+  album?: string
+  duration?: number
+  popularity?: number
+  bpm?: number
+  key?: string
+  explicit?: boolean
+  coverUrl?: string
+  previewUrl?: string
 }
+
+export type HiFiSearchResult = { data: { items: HiFiTrack[]; totalNumberOfItems?: number } }
+export type HiFiRecommendations = { data: { items: Array<{ track: HiFiTrack }> } }
+export type HiFiTrackInfo = { data: HiFiTrack }
+
+const BASE_URL = 'https://api.monochrome.tf'
 
 class HiFiAPIClient {
   private baseUrl: string
-  private apiKey?: string
   private cache: Map<string, { data: unknown; expires: number }> = new Map()
-  private cacheTTL = 24 * 60 * 60 * 1000 // 24 hours
+  private cacheTTL = 24 * 60 * 60 * 1000
 
-  constructor(baseUrl?: string, apiKey?: string) {
+  constructor(baseUrl?: string) {
     this.baseUrl = baseUrl || BASE_URL
-    this.apiKey = apiKey
-  }
-
-  private async fetchWithRetry<T>(
-    endpoint: string,
-    options: FetchOptions = {},
-    retries = 2
-  ): Promise<T> {
-    const { timeout = 10000, ...fetchOptions } = options
-
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeout)
-
-    try {
-      const url = `${this.baseUrl}${endpoint}`
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-        ...(this.apiKey && { Authorization: `Bearer ${this.apiKey}` }),
-        ...fetchOptions.headers,
-      }
-
-      const response = await fetch(url, {
-        ...fetchOptions,
-        headers,
-        signal: controller.signal,
-      })
-
-      clearTimeout(timeoutId)
-
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status} ${response.statusText}`)
-      }
-
-      return await response.json() as T
-    } catch (error) {
-      clearTimeout(timeoutId)
-      
-      if (retries > 0 && error instanceof Error && error.name !== 'AbortError') {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        return this.fetchWithRetry(endpoint, options, retries - 1)
-      }
-      
-      throw error
-    }
   }
 
   private getCached<T>(key: string): T | null {
@@ -119,57 +76,96 @@ class HiFiAPIClient {
     this.cache.set(key, { data, expires: Date.now() + this.cacheTTL })
   }
 
+  private normalizeTrack(item: any): HiFiTrack {
+    let artistName = 'Unknown'
+    if (item.artist?.name) {
+      artistName = item.artist.name
+    } else if (item.artists && item.artists.length > 0) {
+      artistName = item.artists.map((a: any) => a.name).join(', ')
+    }
+
+    let coverUrl = ''
+    if (item.album?.cover) {
+      coverUrl = `https://resources.tidal.com/images/${item.album.cover.replace(/-/g, '/')}/320x320.jpg`
+    }
+
+    return {
+      id: String(item.id),
+      title: item.title || 'Unknown',
+      artist: artistName,
+      album: item.album?.title,
+      duration: item.duration,
+      popularity: item.popularity,
+      bpm: item.bpm,
+      key: item.key,
+      explicit: item.explicit,
+      coverUrl,
+    }
+  }
+
   async search(query: string, limit = 50): Promise<HiFiSearchResult> {
     const cacheKey = `search:${query}:${limit}`
     const cached = this.getCached<HiFiSearchResult>(cacheKey)
     if (cached) return cached
 
-    // Try different endpoint formats
-    const endpoints = [
-      `/search?q=${encodeURIComponent(query)}&limit=${limit}`,
-      `/search?query=${encodeURIComponent(query)}&limit=${limit}`,
-      `/tracks/search?q=${encodeURIComponent(query)}&limit=${limit}`,
-    ]
-
-    for (const endpoint of endpoints) {
-      try {
-        const result = await this.fetchWithRetry<any>(endpoint)
-        if (result && result.data?.tracks) {
-          this.setCache(cacheKey, result.data)
-          return result.data
-        }
-        if (result && result.tracks) {
-          this.setCache(cacheKey, result)
-          return result
-        }
-      } catch (e) {
-        console.log('Failed endpoint:', endpoint, e)
+    try {
+      const response = await fetch(`${this.baseUrl}/search/?s=${encodeURIComponent(query)}&limit=${limit}`)
+      
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`)
       }
+
+      const json = await response.json()
+      
+      if (json?.data?.items) {
+        const result: HiFiSearchResult = {
+          data: {
+            items: json.data.items.slice(0, limit).map((item: any) => this.normalizeTrack(item)),
+            totalNumberOfItems: json.data.totalNumberOfItems || json.data.items.length,
+          }
+        }
+        this.setCache(cacheKey, result)
+        return result
+      }
+
+      return { data: { items: [], totalNumberOfItems: 0 } }
+    } catch (error) {
+      console.error('Search error:', error)
+      return { data: { items: [], totalNumberOfItems: 0 } }
     }
-
-    // Return empty result if all fail
-    return { tracks: [], total: 0 }
-  }
-
-  async searchByArtist(artist: string, limit = 50): Promise<HiFiSearchResult> {
-    return this.search(`artist:${artist}`, limit)
-  }
-
-  async searchByGenre(genre: string, limit = 50): Promise<HiFiSearchResult> {
-    return this.search(`genre:${genre}`, limit)
   }
 
   async getRecommendations(trackId: string, limit = 25): Promise<HiFiRecommendations> {
-    const cacheKey = `recommendations:${trackId}:${limit}`
+    const cacheKey = `recs:${trackId}:${limit}`
     const cached = this.getCached<HiFiRecommendations>(cacheKey)
     if (cached) return cached
 
-    const result = await this.fetchWithRetry<HiFiRecommendations>(
-      `/recommendations/?id=${encodeURIComponent(trackId)}&limit=${limit}`
-    )
+    try {
+      const response = await fetch(`${this.baseUrl}/recommendations/?id=${trackId}&limit=${limit}`)
+      
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`)
+      }
 
-    this.setCache(cacheKey, result)
-    return result
+      const json = await response.json()
+      
+      if (json?.data?.items) {
+        const result: HiFiRecommendations = {
+          data: {
+            items: json.data.items.map((item: any) => ({
+              track: this.normalizeTrack(item.track),
+            })),
+          }
+        }
+        this.setCache(cacheKey, result)
+        return result
+      }
+
+      return { data: { items: [] } }
+    } catch (error) {
+      console.error('Recommendations error:', error)
+      return { data: { items: [] } }
+    }
   }
 
   async getTrackInfo(trackId: string): Promise<HiFiTrackInfo> {
@@ -177,26 +173,39 @@ class HiFiAPIClient {
     const cached = this.getCached<HiFiTrackInfo>(cacheKey)
     if (cached) return cached
 
-    const result = await this.fetchWithRetry<HiFiTrackInfo>(
-      `/info/?id=${encodeURIComponent(trackId)}`
-    )
+    try {
+      const response = await fetch(`${this.baseUrl}/info/?id=${trackId}`)
+      
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`)
+      }
 
-    this.setCache(cacheKey, result)
-    return result
+      const json = await response.json()
+      
+      if (json?.data) {
+        const result: HiFiTrackInfo = {
+          data: this.normalizeTrack(json.data),
+        }
+        this.setCache(cacheKey, result)
+        return result
+      }
+
+      throw new Error('No track data')
+    } catch (error) {
+      console.error('Track info error:', error)
+      throw error
+    }
   }
 
-  async getBatchTrackInfo(trackIds: string[]): Promise<HiFiTrackInfo[]> {
-    const results: HiFiTrackInfo[] = []
-    const batchSize = 10
-
-    for (let i = 0; i < trackIds.length; i += batchSize) {
-      const batch = trackIds.slice(i, i + batchSize)
-      const promises = batch.map(id => this.getTrackInfo(id).catch(() => null))
-      const batchResults = await Promise.all(promises)
-      results.push(...batchResults.filter((r): r is HiFiTrackInfo => r !== null))
-      
-      if (i + batchSize < trackIds.length) {
-        await new Promise(resolve => setTimeout(resolve, 100))
+  async getBatchTrackInfo(trackIds: string[]): Promise<HiFiTrack[]> {
+    const results: HiFiTrack[] = []
+    
+    for (const id of trackIds.slice(0, 10)) {
+      try {
+        const info = await this.getTrackInfo(id)
+        results.push(info.data)
+      } catch {
+        // Skip failed requests
       }
     }
 

@@ -189,8 +189,9 @@ export default function HomePage() {
         try {
           console.log('Searching for:', query)
           const results = await hiFiClient.search(query, 50)
-          console.log('Results for', query, ':', results.tracks.length)
-          allTracks.push(...results.tracks)
+          const trackList = results.data?.items || []
+          console.log('Results for', query, ':', trackList.length)
+          allTracks.push(...trackList)
         } catch (e: any) {
           console.error('Search error for', query, ':', e.message)
         }
