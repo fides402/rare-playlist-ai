@@ -1,14 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Search, Sparkles, Play, Pause, Heart, ThumbsDown, Save, Volume2, SkipBack, SkipForward, ListMusic, Loader2, Download, Trash2 } from 'lucide-react'
-import { usePlayer } from '@/components/PlayerContext'
-import { showToast } from '@/components/ui/Toaster'
+import { useState, useEffect, useRef } from 'react'
+import { Search, Sparkles, Play, Pause, Heart, Save, Volume2, ListMusic, Loader2, Download, Trash2, SkipBack, SkipForward } from 'lucide-react'
 import { hiFiClient } from '@/lib/hifiClient'
 import { planFromPrompt, extractConstraintsFromPlan } from '@/lib/planner'
-import { rankTracks, createInitialProfile, updateProfileWithFeedback, type UserProfile } from '@/lib/ranking'
+import { rankTracks } from '@/lib/ranking'
 import { graphDiscovery, enrichTracksWithInfo } from '@/lib/graphDiscovery'
-import { getPlaylists, savePlaylist, getUserFeedback, addTrackFeedback, deletePlaylist, exportPlaylistAsJson, type PlaylistData } from '@/lib/localStorage'
 import type { HiFiTrack } from '@/lib/hifiClient'
 
 interface TrackWithScore extends HiFiTrack {
@@ -20,8 +17,6 @@ interface TrackWithScore extends HiFiTrack {
 export default function HomePage() {
   const [prompt, setPrompt] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
-  const [progress, setProgress] = useState('')
-  const [progressValue, setProgressValue] = useState(0)
   const [tracks, setTracks] = useState<TrackWithScore[]>([])
   const [playlistName, setPlaylistName] = useState('')
   const [showSaveModal, setShowSaveModal] = useState(false)
@@ -29,12 +24,16 @@ export default function HomePage() {
   const [playlistLength, setPlaylistLength] = useState(30)
   const [explorationMode, setExplorationMode] = useState(0.3)
   const [hop2Enabled, setHop2Enabled] = useState(true)
-  const [savedPlaylists, setSavedPlaylists] = useState<PlaylistData[]>([])
+  const [savedPlaylists, setSavedPlaylists] = useState<any[]>([])
   const [showPlaylists, setShowPlaylists] = useState(false)
-
-  const { currentTrack, isPlaying, toggle, play, playQueue, next, previous, progress: playerProgress, duration, volume, setVolume, quality, setQuality } = usePlayer()
+  const [toasts, setToasts] = useState<{id: number, message: string, type: string}[]>([])
+  const [currentTrack, setCurrentTrack] = useState<HiFiTrack | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    
     const stored = localStorage.getItem('rareplaylist_userId')
     if (stored) {
       setUserId(stored)
@@ -43,251 +42,225 @@ export default function HomePage() {
       localStorage.setItem('rareplaylist_userId', newId)
       setUserId(newId)
     }
+    
+    try {
+      const saved = localStorage.getItem('rareplaylist_playlists')
+      if (saved) setSavedPlaylists(JSON.parse(saved))
+    } catch {}
   }, [])
 
-  useEffect(() => {
-    if (userId) {
-      setSavedPlaylists(getPlaylists(userId))
-    }
-  }, [userId])
+  const showToast = (message: string, type: string = 'info') => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, message, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
+  }
 
-  const generatePlaylist = useCallback(async () => {
+  const generatePlaylist = async () => {
     if (!prompt.trim()) {
       showToast('Please enter a description', 'error')
       return
     }
 
     setIsGenerating(true)
-    setProgress('Analyzing your request...')
-    setProgressValue(0)
     setTracks([])
 
     try {
-      setProgress('Planning...')
       const plan = await planFromPrompt(prompt)
       const constraints = extractConstraintsFromPlan(plan)
 
-      setProgress('Searching...')
-      setProgressValue(0.2)
       let allTracks: HiFiTrack[] = []
       
-      for (let i = 0; i < plan.searchQueries.slice(0, 3).length; i++) {
-        const query = plan.searchQueries[i]
+      for (const query of plan.searchQueries.slice(0, 3)) {
         try {
           const results = await hiFiClient.search(query, 50)
           allTracks.push(...results.tracks)
-        } catch (error) {
-          console.error(`Search failed for "${query}":`, error)
-        }
-        setProgressValue(0.2 + (0.3 * (i + 1) / plan.searchQueries.slice(0, 3).length))
+        } catch (e) {}
       }
 
       if (allTracks.length === 0) {
-        throw new Error('No tracks found. Try a different search term.')
+        throw new Error('No tracks found')
       }
 
-      setProgress('Expanding with recommendations...')
-      setProgressValue(0.5)
-      
-      const discoveryResult = await graphDiscovery(
-        allTracks,
-        {
-          maxSeeds: 8,
-          maxRecsPerSeed: 25,
-          maxHop2Seeds: hop2Enabled ? 3 : 0,
-          maxTotalRequests: 40,
-          enableHop2: hop2Enabled,
-        }
-      )
+      const discoveryResult = await graphDiscovery(allTracks, {
+        maxSeeds: 8,
+        maxRecsPerSeed: 25,
+        maxHop2Seeds: hop2Enabled ? 3 : 0,
+        maxTotalRequests: 40,
+        enableHop2: hop2Enabled,
+      })
 
-      setProgress('Enriching with metadata...')
-      setProgressValue(0.7)
-      
       let enrichedTracks = discoveryResult.tracks
       if (discoveryResult.tracks.length > 10) {
         try {
           enrichedTracks = await enrichTracksWithInfo(discoveryResult.tracks, 15)
-        } catch (error) {
-          console.error('Enrichment failed:', error)
-        }
+        } catch {}
       }
 
-      setProgress('Ranking tracks...')
-      setProgressValue(0.85)
+      const rankedTracks = rankTracks(enrichedTracks, constraints, undefined, explorationMode)
 
-      const feedback = getUserFeedback(userId)
-      let userProfile: UserProfile | undefined
-      
-      if (feedback.length > 0) {
-        userProfile = createInitialProfile(userId)
-        for (const f of feedback) {
-          updateProfileWithFeedback(userProfile, {
-            id: f.trackId,
-            title: f.trackName,
-            artist: f.artistName,
-          }, f.liked)
-        }
-      }
-
-      const rankedTracks = rankTracks(
-        enrichedTracks,
-        constraints,
-        userProfile,
-        explorationMode
-      )
-
-      const finalTracks = rankedTracks
-        .slice(0, playlistLength)
-        .map(track => ({
-          ...track,
-          rarityScore: track.rarityScore,
-          reason: track.reason,
-          finalScore: track.finalScore,
-        }))
+      const finalTracks = rankedTracks.slice(0, playlistLength).map(track => ({
+        ...track,
+        rarityScore: track.rarityScore,
+        reason: track.reason,
+        finalScore: track.finalScore,
+      }))
 
       setTracks(finalTracks as TrackWithScore[])
-      setPlaylistName(generatePlaylistName(prompt))
-      setProgressValue(1)
+      setPlaylistName(`Rare ${prompt.split(' ').slice(0, 3).join(' ')} Mix`)
       showToast(`Found ${finalTracks.length} rare tracks!`, 'success')
-    } catch (error) {
-      console.error('Generation failed:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      showToast(`Failed: ${errorMessage}`, 'error')
+    } catch (error: any) {
+      showToast(error.message || 'Failed to generate', 'error')
     } finally {
       setIsGenerating(false)
     }
-  }, [prompt, userId, playlistLength, explorationMode, hop2Enabled])
-
-  const generatePlaylistName = (prompt: string): string => {
-    const words = prompt.split(' ').slice(0, 4).join(' ')
-    return `Rare ${words} Mix`
   }
 
-  const handlePlay = (track: TrackWithScore, index: number) => {
-    playQueue(tracks as HiFiTrack[], index)
+  const playTrack = (track: TrackWithScore) => {
+    if (typeof window === 'undefined') return
+    
+    if (!audioRef.current) {
+      audioRef.current = new Audio()
+    }
+    
+    if (currentTrack?.id === track.id && isPlaying) {
+      audioRef.current.pause()
+      setIsPlaying(false)
+    } else {
+      const src = track.previewUrl || `https://api.monochrome.tf/stream/${track.id}`
+      audioRef.current.src = src
+      audioRef.current.play().then(() => {
+        setCurrentTrack(track)
+        setIsPlaying(true)
+      }).catch(() => {
+        showToast('Cannot play this track', 'error')
+      })
+    }
   }
 
   const handleSave = () => {
     if (!playlistName.trim()) {
-      showToast('Please enter a playlist name', 'error')
+      showToast('Enter a name', 'error')
       return
     }
 
-    const playlist = savePlaylist(
-      userId,
-      playlistName,
+    const playlist = {
+      id: `${userId}_${Date.now()}`,
+      name: playlistName,
       prompt,
-      tracks.map((t, i) => ({
+      createdAt: new Date().toISOString(),
+      tracks: tracks.map((t, i) => ({
         trackId: t.id,
         trackName: t.title,
-        artistName: t.artist || 'Unknown Artist',
+        artistName: t.artist || 'Unknown',
         position: i,
         reason: t.reason,
       }))
-    )
+    }
     
-    setSavedPlaylists([playlist, ...savedPlaylists])
-    showToast('Playlist saved!', 'success')
+    const updated = [playlist, ...savedPlaylists]
+    setSavedPlaylists(updated)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rareplaylist_playlists', JSON.stringify(updated))
+    }
+    showToast('Saved!', 'success')
     setShowSaveModal(false)
   }
 
   const handleLike = (track: TrackWithScore) => {
-    addTrackFeedback(userId, track.id, track.title, track.artist || 'Unknown', true)
-    showToast('Added to liked!', 'success')
+    if (typeof window === 'undefined') return
+    let feedback: any[] = []
+    try {
+      feedback = JSON.parse(localStorage.getItem('rareplaylist_feedback') || '[]')
+    } catch {}
+    const existing = feedback.findIndex(f => f.trackId === track.id)
+    if (existing >= 0) {
+      feedback[existing] = { ...feedback[existing], liked: true }
+    } else {
+      feedback.push({ trackId: track.id, trackName: track.title, artistName: track.artist, liked: true })
+    }
+    localStorage.setItem('rareplaylist_feedback', JSON.stringify(feedback))
+    showToast('Liked!', 'success')
   }
 
-  const handleDislike = (track: TrackWithScore) => {
-    addTrackFeedback(userId, track.id, track.title, track.artist || 'Unknown', false)
-    showToast('Disliked!', 'info')
-  }
-
-  const handleDeletePlaylist = (playlistId: string) => {
-    deletePlaylist(userId, playlistId)
-    setSavedPlaylists(savedPlaylists.filter(p => p.id !== playlistId))
-    showToast('Playlist deleted', 'info')
-  }
-
-  const handleExport = (playlist: PlaylistData) => {
-    const json = exportPlaylistAsJson(playlist)
-    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
+  const handleExport = (playlist: any) => {
+    const blob = new Blob([JSON.stringify(playlist, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
     a.download = `${playlist.name}.json`
     a.click()
-    URL.revokeObjectURL(url)
-    showToast('Playlist exported!', 'success')
   }
 
-  const formatTime = (seconds: number) => {
-    if (!seconds || isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
+  const handleDelete = (id: string) => {
+    const updated = savedPlaylists.filter(p => p.id !== id)
+    setSavedPlaylists(updated)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rareplaylist_playlists', JSON.stringify(updated))
+    }
+    showToast('Deleted', 'info')
   }
 
   return (
-    <div className="min-h-screen bg-background pb-32">
-      <div className="fixed top-0 left-0 right-0 h-16 bg-gradient-to-b from-background to-transparent z-40 pointer-events-none" />
+    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', paddingBottom: currentTrack ? '180px' : '40px' }}>
+      {typeof window !== 'undefined' && <audio ref={audioRef} onEnded={() => setIsPlaying(false)} />}
       
-      <main className="pt-20 px-4 max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div className="text-center flex-1">
-            <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">
-              Rare<span className="text-primary">Playlist</span>AI
+      <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <div>
+            <h1 style={{ fontSize: '32px', fontWeight: 'bold', margin: 0 }}>
+              Rare<span style={{ color: '#00ff88' }}>Playlist</span>AI
             </h1>
-            <p className="text-text-secondary">Discover rare and unique tracks with AI</p>
+            <p style={{ color: '#a0a0a0', margin: '4px 0 0' }}>Discover rare and unique tracks with AI</p>
           </div>
-          <button
+          <button 
             onClick={() => setShowPlaylists(!showPlaylists)}
-            className="flex items-center gap-2 bg-surface hover:bg-surface-hover text-white px-4 py-2 rounded-lg transition-colors"
+            style={{ background: '#0a0a0a', color: '#fff', border: '1px solid #222', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
           >
-            <ListMusic className="w-4 h-4" />
+            <ListMusic size={16} />
             My Playlists ({savedPlaylists.length})
           </button>
         </div>
 
         {!showPlaylists ? (
           <>
-            <div className="bg-surface rounded-2xl p-4 mb-6 border border-border">
-              <div className="flex gap-3">
-                <div className="flex-1 relative">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
+            <div style={{ background: '#0a0a0a', borderRadius: '16px', padding: '16px', border: '1px solid #222', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <div style={{ flex: 1, position: 'relative' }}>
+                  <Search style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#606060' }} size={20} />
                   <input
                     type="text"
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && generatePlaylist()}
-                    placeholder="Describe your perfect playlist... (e.g., rare Italian 70s jazz-funk, nocturnal mood)"
-                    className="w-full bg-surface-active rounded-xl pl-12 pr-4 py-4 text-white placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="Describe your playlist... (e.g., rare Italian 70s jazz-funk)"
+                    style={{ width: '100%', background: '#1a1a1a', border: 'none', borderRadius: '12px', padding: '16px 16px 16px 48px', color: '#fff', fontSize: '16px', outline: 'none' }}
                   />
                 </div>
                 <button
                   onClick={generatePlaylist}
                   disabled={isGenerating}
-                  className="bg-primary hover:bg-primary-hover text-black font-semibold px-6 py-4 rounded-xl flex items-center gap-2 transition-colors disabled:opacity-50"
+                  style={{ background: '#00ff88', color: '#000', border: 'none', borderRadius: '12px', padding: '16px 24px', fontWeight: 'bold', cursor: isGenerating ? 'not-allowed' : 'pointer', opacity: isGenerating ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
-                  {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                  <span className="hidden sm:inline">Generate</span>
+                  {isGenerating ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
+                  Generate
                 </button>
               </div>
 
-              <div className="flex flex-wrap gap-4 mt-4 pt-4 border-t border-border">
-                <div className="flex items-center gap-2">
-                  <span className="text-text-secondary text-sm">Length:</span>
+              <div style={{ display: 'flex', gap: '20px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #222', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: '#a0a0a0', fontSize: '14px' }}>Length:</span>
                   <select
                     value={playlistLength}
                     onChange={(e) => setPlaylistLength(Number(e.target.value))}
-                    className="bg-surface-active text-white rounded-lg px-3 py-2 text-sm focus:outline-none"
+                    style={{ background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 12px' }}
                   >
-                    <option value={20}>20 tracks</option>
-                    <option value={30}>30 tracks</option>
-                    <option value={50}>50 tracks</option>
+                    <option value={20}>20</option>
+                    <option value={30}>30</option>
+                    <option value={50}>50</option>
                   </select>
                 </div>
-                
-                <div className="flex items-center gap-2">
-                  <span className="text-text-secondary text-sm">Rarity:</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: '#a0a0a0', fontSize: '14px' }}>Rarity:</span>
                   <input
                     type="range"
                     min="0"
@@ -295,102 +268,61 @@ export default function HomePage() {
                     step="0.1"
                     value={explorationMode}
                     onChange={(e) => setExplorationMode(Number(e.target.value))}
-                    className="w-24"
+                    style={{ width: '80px' }}
                   />
-                  <span className="text-text-muted text-xs">
-                    {explorationMode < 0.3 ? 'Very Rare' : explorationMode < 0.6 ? 'Balanced' : 'Discover'}
-                  </span>
                 </div>
-
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={hop2Enabled}
-                    onChange={(e) => setHop2Enabled(e.target.checked)}
-                    className="w-4 h-4 accent-primary"
-                  />
-                  <span className="text-text-secondary text-sm">Deep Discovery</span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={hop2Enabled} onChange={(e) => setHop2Enabled(e.target.checked)} />
+                  <span style={{ color: '#a0a0a0', fontSize: '14px' }}>Deep Discovery</span>
                 </label>
               </div>
-
-              {isGenerating && (
-                <div className="mt-4 pt-4 border-t border-border">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span className="text-text-secondary text-sm">{progress}</span>
-                  </div>
-                  <div className="h-1 bg-surface-active rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary transition-all duration-300"
-                      style={{ width: `${progressValue * 100}%` }}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
 
             {tracks.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xl font-semibold text-white">Your Rare Playlist</h2>
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h2 style={{ fontSize: '20px', fontWeight: '600' }}>Your Rare Playlist</h2>
                   <button
                     onClick={() => setShowSaveModal(true)}
-                    className="flex items-center gap-2 bg-surface hover:bg-surface-hover text-white px-4 py-2 rounded-lg transition-colors"
+                    style={{ background: '#0a0a0a', color: '#fff', border: '1px solid #222', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer' }}
                   >
-                    <Save className="w-4 h-4" />
+                    <Save size={16} style={{ display: 'inline', marginRight: '6px' }} />
                     Save
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  {tracks.map((track, index) => (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {tracks.map((track) => (
                     <div
                       key={track.id}
-                      className={`group flex items-center gap-4 p-3 rounded-xl hover:bg-surface-hover transition-colors cursor-pointer ${
-                        currentTrack?.id === track.id ? 'bg-surface-active' : ''
-                      }`}
-                      onClick={() => handlePlay(track, index)}
+                      onClick={() => playTrack(track)}
+                      style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '16px', 
+                        padding: '12px', 
+                        borderRadius: '12px', 
+                        background: currentTrack?.id === track.id ? '#1a1a1a' : 'transparent',
+                        cursor: 'pointer'
+                      }}
                     >
-                      <div className="w-10 h-10 rounded-lg bg-surface-active flex items-center justify-center overflow-hidden flex-shrink-0">
-                        {track.coverUrl ? (
-                          <img src={track.coverUrl} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <ListMusic className="w-5 h-5 text-text-muted" />
-                        )}
+                      <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        {currentTrack?.id === track.id && isPlaying ? <Pause size={18} color="#00ff88" /> : <Play size={18} color="#00ff88" />}
                       </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-text-muted text-xs w-5">{index + 1}</span>
-                          <span className={`font-medium truncate ${currentTrack?.id === track.id ? 'text-primary' : 'text-white'}`}>
-                            {track.title}
-                          </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: '500', color: currentTrack?.id === track.id ? '#00ff88' : '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {track.title}
                         </div>
-                        <div className="flex items-center gap-2 text-sm text-text-secondary truncate">
-                          <span className="truncate">{track.artist || 'Unknown'}</span>
-                          <span className="text-text-muted">•</span>
-                          <span className="text-xs text-primary">{track.reason}</span>
+                        <div style={{ fontSize: '14px', color: '#a0a0a0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {track.artist} • <span style={{ color: '#00ff88', fontSize: '12px' }}>{track.reason}</span>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-surface-active text-xs">
-                          <Sparkles className="w-3 h-3 text-primary" />
-                          <span className="text-primary">{Math.round(track.rarityScore * 100)}</span>
-                        </div>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleLike(track) }}
-                          className="p-2 hover:bg-surface-active rounded-lg"
-                        >
-                          <Heart className="w-4 h-4 text-text-secondary hover:text-secondary" />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDislike(track) }}
-                          className="p-2 hover:bg-surface-active rounded-lg"
-                        >
-                          <ThumbsDown className="w-4 h-4 text-text-secondary" />
-                        </button>
-                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleLike(track) }}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px' }}
+                      >
+                        <Heart size={16} color="#a0a0a0" />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -398,200 +330,117 @@ export default function HomePage() {
             )}
 
             {tracks.length === 0 && !isGenerating && (
-              <div className="text-center py-12">
-                <Sparkles className="w-12 h-12 text-text-muted mx-auto mb-4" />
-                <p className="text-text-secondary">Enter a description and generate your rare playlist</p>
-                <div className="mt-8 text-left max-w-lg mx-auto">
-                  <p className="text-text-muted text-sm mb-2">Try these examples:</p>
-                  <div className="space-y-2">
-                    {[
-                      'rare OST italiane anni 70 jazz-funk mood notturno',
-                      'underground japanese city pop 80s',
-                      'obscure african funk 70s deep cuts',
-                    ].map((example) => (
-                      <button
-                        key={example}
-                        onClick={() => setPrompt(example)}
-                        className="block w-full text-left px-4 py-2 rounded-lg bg-surface hover:bg-surface-hover text-text-secondary text-sm transition-colors"
-                      >
-                        "{example}"
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+                <Sparkles size={48} color="#606060" style={{ margin: '0 auto 16px' }} />
+                <p style={{ color: '#a0a0a0' }}>Enter a description and generate your rare playlist</p>
               </div>
             )}
           </>
         ) : (
-          <div className="space-y-4">
+          <div>
             <button
               onClick={() => setShowPlaylists(false)}
-              className="text-primary hover:underline mb-4"
+              style={{ background: 'none', border: 'none', color: '#00ff88', cursor: 'pointer', marginBottom: '20px' }}
             >
-              ← Back to Discovery
+              ← Back
             </button>
             
             {savedPlaylists.length === 0 ? (
-              <div className="text-center py-12">
-                <ListMusic className="w-16 h-16 text-text-muted mx-auto mb-4" />
-                <h2 className="text-xl font-semibold text-white mb-2">No playlists yet</h2>
-                <p className="text-text-secondary">Generate your first rare playlist!</p>
+              <div style={{ textAlign: 'center', padding: '60px' }}>
+                <ListMusic size={48} color="#606060" style={{ margin: '0 auto 16px' }} />
+                <p style={{ color: '#a0a0a0' }}>No playlists yet</p>
               </div>
             ) : (
-              <div className="grid gap-4">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {savedPlaylists.map(playlist => (
-                  <div
-                    key={playlist.id}
-                    className="bg-surface rounded-2xl p-4 border border-border"
-                  >
-                    <div className="flex items-start justify-between">
+                  <div key={playlist.id} style={{ background: '#0a0a0a', borderRadius: '16px', padding: '16px', border: '1px solid #222' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
-                        <h3 className="text-lg font-semibold text-white">{playlist.name}</h3>
-                        <p className="text-text-secondary text-sm">"{playlist.prompt}"</p>
-                        <p className="text-text-muted text-xs mt-1">{playlist.tracks.length} tracks</p>
+                        <h3 style={{ fontSize: '18px', fontWeight: '600', margin: 0 }}>{playlist.name}</h3>
+                        <p style={{ color: '#a0a0a0', fontSize: '14px', margin: '4px 0' }}>"{playlist.prompt}"</p>
+                        <p style={{ color: '#606060', fontSize: '12px' }}>{playlist.tracks.length} tracks</p>
                       </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleExport(playlist)}
-                          className="p-2 hover:bg-surface-hover rounded-lg"
-                          title="Export JSON"
-                        >
-                          <Download className="w-5 h-5 text-text-secondary" />
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => handleExport(playlist)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px' }}>
+                          <Download size={18} color="#a0a0a0" />
                         </button>
-                        <button
-                          onClick={() => handleDeletePlaylist(playlist.id)}
-                          className="p-2 hover:bg-surface-hover rounded-lg"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-5 h-5 text-text-secondary" />
+                        <button onClick={() => handleDelete(playlist.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px' }}>
+                          <Trash2 size={18} color="#a0a0a0" />
                         </button>
                       </div>
                     </div>
-                    {playlist.tracks.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-border">
-                        <div className="flex flex-wrap gap-2">
-                          {playlist.tracks.slice(0, 5).map((track, idx) => (
-                            <span
-                              key={idx}
-                              className="px-3 py-1 rounded-full bg-surface-hover text-text-secondary text-xs"
-                            >
-                              {track.trackName} - {track.artistName}
-                            </span>
-                          ))}
-                          {playlist.tracks.length > 5 && (
-                            <span className="px-3 py-1 rounded-full bg-surface-hover text-text-muted text-xs">
-                              +{playlist.tracks.length - 5} more
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
         )}
-      </main>
+      </div>
 
       {currentTrack && (
-        <div className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border z-50">
-          <div className="max-w-4xl mx-auto px-4 py-3">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-lg bg-surface-active flex items-center justify-center overflow-hidden flex-shrink-0">
-                {currentTrack.coverUrl ? (
-                  <img src={currentTrack.coverUrl} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <ListMusic className="w-6 h-6 text-text-muted" />
-                )}
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="text-white font-medium truncate">{currentTrack.title}</div>
-                <div className="text-text-secondary text-sm truncate">{currentTrack.artist}</div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button onClick={previous} className="p-2 hover:bg-surface-hover rounded-lg">
-                  <SkipBack className="w-5 h-5 text-white" />
-                </button>
-                <button
-                  onClick={toggle}
-                  className="w-10 h-10 bg-primary rounded-full flex items-center justify-center hover:bg-primary-hover transition-colors"
-                >
-                  {isPlaying ? (
-                    <Pause className="w-5 h-5 text-black" />
-                  ) : (
-                    <Play className="w-5 h-5 text-black ml-0.5" />
-                  )}
-                </button>
-                <button onClick={next} className="p-2 hover:bg-surface-hover rounded-lg">
-                  <SkipForward className="w-5 h-5 text-white" />
-                </button>
-              </div>
-
-              <div className="hidden md:flex items-center gap-2 w-48">
-                <Volume2 className="w-4 h-4 text-text-secondary" />
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={volume}
-                  onChange={(e) => setVolume(Number(e.target.value))}
-                  className="flex-1"
-                />
-              </div>
-
-              <div className="hidden sm:flex items-center gap-2">
-                <select
-                  value={quality}
-                  onChange={(e) => setQuality(e.target.value as 'max' | 'high' | 'medium' | 'low')}
-                  className="bg-surface-active text-white text-xs rounded px-2 py-1"
-                >
-                  <option value="max">MAX</option>
-                  <option value="high">HIGH</option>
-                  <option value="medium">MID</option>
-                  <option value="low">LOW</option>
-                </select>
-              </div>
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#0a0a0a', borderTop: '1px solid #222', padding: '12px 20px' }}>
+          <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ width: '48px', height: '48px', borderRadius: '8px', background: '#1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ListMusic size={24} color="#606060" />
             </div>
-
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-text-muted w-10">{formatTime(playerProgress)}</span>
-              <div className="flex-1 h-1 bg-surface-active rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary transition-all"
-                  style={{ width: duration ? `${(playerProgress / duration) * 100}%` : '0%' }}
-                />
-              </div>
-              <span className="text-xs text-text-muted w-10">{formatTime(duration)}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentTrack.title}</div>
+              <div style={{ color: '#a0a0a0', fontSize: '14px' }}>{currentTrack.artist}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <button onClick={() => audioRef.current && (audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10))}>
+                <SkipBack size={20} color="#fff" />
+              </button>
+              <button
+                onClick={() => isPlaying ? audioRef.current?.pause() : audioRef.current?.play()}
+                style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#00ff88', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+              >
+                {isPlaying ? <Pause size={20} color="#000" /> : <Play size={20} color="#000" style={{ marginLeft: '2px' }} />}
+              </button>
+              <button onClick={() => audioRef.current && (audioRef.current.currentTime += 10)}>
+                <SkipForward size={20} color="#fff" />
+              </button>
             </div>
           </div>
         </div>
       )}
 
+      <div style={{ position: 'fixed', bottom: '100px', right: '20px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {toasts.map(t => (
+          <div key={t.id} style={{ 
+            background: t.type === 'error' ? '#ff3366' : t.type === 'success' ? '#00ff88' : '#1a1a1a', 
+            color: t.type === 'success' ? '#000' : '#fff',
+            padding: '12px 16px', 
+            borderRadius: '8px',
+            fontSize: '14px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+          }}>
+            {t.message}
+          </div>
+        ))}
+      </div>
+
       {showSaveModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-surface rounded-2xl p-6 w-full max-w-md animate-slide-up">
-            <h3 className="text-xl font-semibold text-white mb-4">Save Playlist</h3>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '20px' }}>
+          <div style={{ background: '#0a0a0a', borderRadius: '16px', padding: '24px', width: '100%', maxWidth: '400px' }}>
+            <h3 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>Save Playlist</h3>
             <input
               type="text"
               value={playlistName}
               onChange={(e) => setPlaylistName(e.target.value)}
               placeholder="Playlist name"
-              className="w-full bg-surface-active rounded-xl px-4 py-3 text-white placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+              style={{ width: '100%', background: '#1a1a1a', border: 'none', borderRadius: '12px', padding: '12px 16px', color: '#fff', fontSize: '16px', marginBottom: '16px', outline: 'none' }}
             />
-            <div className="flex gap-3">
+            <div style={{ display: 'flex', gap: '12px' }}>
               <button
                 onClick={() => setShowSaveModal(false)}
-                className="flex-1 px-4 py-3 rounded-xl bg-surface-hover text-white hover:bg-surface-active transition-colors"
+                style={{ flex: 1, padding: '12px', borderRadius: '12px', background: '#1a1a1a', color: '#fff', border: 'none', cursor: 'pointer' }}
               >
                 Cancel
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 px-4 py-3 rounded-xl bg-primary text-black font-semibold hover:bg-primary-hover transition-colors"
+                style={{ flex: 1, padding: '12px', borderRadius: '12px', background: '#00ff88', color: '#000', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}
               >
                 Save
               </button>
@@ -599,6 +448,11 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      <style jsx global>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+      `}</style>
     </div>
   )
 }
