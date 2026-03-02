@@ -52,7 +52,8 @@ export async function graphDiscovery(
     const seed = seeds[i]
     try {
       const recs = await hiFiClient.getRecommendations(seed.id, requestsPerSeed)
-      hop1Tracks.push(...recs.tracks)
+      const recTracks = recs.data?.items?.map((item: any) => item.track) || []
+      hop1Tracks.push(...recTracks)
       totalRequests++
       hop1Count++
 
@@ -80,7 +81,8 @@ export async function graphDiscovery(
 
       try {
         const recs = await hiFiClient.getRecommendations(seed.id, Math.floor(requestsPerSeed / 2))
-        allTracks.push(...recs.tracks)
+        const recTracks = recs.data?.items?.map((item: any) => item.track) || []
+        allTracks.push(...recTracks)
         totalRequests++
         hop2Count++
 
@@ -175,10 +177,10 @@ export async function enrichTracksWithInfo(
       const info = await hiFiClient.getTrackInfo(track.id)
       enriched.push({
         ...track,
-        bpm: info.bpm ?? track.bpm,
-        key: info.key ?? track.key,
-        popularity: info.popularity ?? track.popularity,
-        coverUrl: info.coverUrl ?? track.coverUrl,
+        bpm: info.data.bpm ?? track.bpm,
+        key: info.data.key ?? track.key,
+        popularity: info.data.popularity ?? track.popularity,
+        coverUrl: info.data.coverUrl ?? track.coverUrl,
       })
     } catch {
       enriched.push(track)
