@@ -124,12 +124,31 @@ class HiFiAPIClient {
     const cached = this.getCached<HiFiSearchResult>(cacheKey)
     if (cached) return cached
 
-    const result = await this.fetchWithRetry<HiFiSearchResult>(
-      `/search/?q=${encodeURIComponent(query)}&limit=${limit}`
-    )
+    // Try different endpoint formats
+    const endpoints = [
+      `/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+      `/search?query=${encodeURIComponent(query)}&limit=${limit}`,
+      `/tracks/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    ]
 
-    this.setCache(cacheKey, result)
-    return result
+    for (const endpoint of endpoints) {
+      try {
+        const result = await this.fetchWithRetry<any>(endpoint)
+        if (result && result.data?.tracks) {
+          this.setCache(cacheKey, result.data)
+          return result.data
+        }
+        if (result && result.tracks) {
+          this.setCache(cacheKey, result)
+          return result
+        }
+      } catch (e) {
+        console.log('Failed endpoint:', endpoint, e)
+      }
+    }
+
+    // Return empty result if all fail
+    return { tracks: [], total: 0 }
   }
 
   async searchByArtist(artist: string, limit = 50): Promise<HiFiSearchResult> {
