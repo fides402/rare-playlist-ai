@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.vercel/
+.netlify/
+*.log
+.env
+.env.local
+dev.db
+dev.db-journal
