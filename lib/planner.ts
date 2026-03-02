@@ -1,9 +1,4 @@
 import { z } from 'zod'
-import Groq from 'groq-sdk'
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || '',
-})
 
 export const MusicalConstraintsSchema = z.object({
   bpmMin: z.number().optional(),
@@ -52,11 +47,11 @@ function extractConstraintsFromPrompt(prompt: string): ParsedConstraints {
     }
   }
 
-  const moods = ['dark', 'moody', 'melancholic', 'upbeat', 'energetic', 'chill', 'relaxed', 'nostalgic', 'dreamy', 'aggressive', 'notturno', 'notturna']
+  const moods = ['dark', 'moody', 'melancholic', 'upbeat', 'energetic', 'chill', 'relaxed', 'nostalgic', 'dreamy', 'aggressive', 'notturno', 'notturna', 'nocturnal', 'night']
   const foundMoods = moods.filter(m => lowerPrompt.includes(m))
   if (foundMoods.length > 0) constraints.mood = foundMoods
 
-  const genres = ['jazz', 'funk', 'soul', 'rock', 'electronic', 'ambient', 'classical', 'folk', 'blues', 'hip-hop', 'rap', 'pop', 'disco', 'bossanova', 'fusion', 'experimental']
+  const genres = ['jazz', 'funk', 'soul', 'rock', 'electronic', 'ambient', 'classical', 'folk', 'blues', 'hip-hop', 'rap', 'pop', 'disco', 'bossanova', 'fusion', 'experimental', 'soundtrack', 'ost', 'city pop', 'afrobeat', 'boogie', 'techno', 'house']
   const foundGenres = genres.filter(g => lowerPrompt.includes(g))
   if (foundGenres.length > 0) constraints.genre = foundGenres
 
@@ -67,23 +62,26 @@ function extractConstraintsFromPrompt(prompt: string): ParsedConstraints {
     constraints.decade = decade.length === 2 ? `19${decade}` : decade
   }
 
-  const countries = ['italian', 'italiana', 'american', 'americana', 'british', 'japanese', 'french', 'german', 'brazilian', 'spanish']
-  const foundCountries = countries.filter(c => lowerPrompt.includes(c))
-  if (foundCountries.length > 0) {
-    const countryMap: Record<string, string> = {
-      'italian': 'Italy', 'italiana': 'Italy',
-      'american': 'USA', 'americana': 'USA',
-      'british': 'UK',
-      'japanese': 'Japan',
-      'french': 'France',
-      'german': 'Germany',
-      'brazilian': 'Brazil',
-      'spanish': 'Spain'
+  const countries: Record<string, string> = {
+    'italian': 'Italy', 'italiana': 'Italy', 'italiano': 'Italy',
+    'american': 'USA', 'americana': 'USA', 'americano': 'USA',
+    'british': 'UK', 'britannico': 'UK',
+    'japanese': 'Japan', 'giapanese': 'Japan', 'japan': 'Japan',
+    'french': 'France', 'francese': 'France',
+    'german': 'Germany', 'tedesco': 'Germany',
+    'brazilian': 'Brazil', 'brasil': 'Brazil',
+    'spanish': 'Spain', 'spagnolo': 'Spain',
+    'african': 'Africa', 'africano': 'Africa',
+    'detroit': 'USA',
+  }
+  for (const [key, value] of Object.entries(countries)) {
+    if (lowerPrompt.includes(key)) {
+      constraints.country = value
+      break
     }
-    constraints.country = countryMap[foundCountries[0]]
   }
 
-  const instruments = ['piano', 'guitar', 'synth', 'drums', 'bass', 'violin', 'saxophone', 'organ', 'strings', 'horn']
+  const instruments = ['piano', 'guitar', 'synth', 'drums', 'bass', 'violin', 'saxophone', 'organ', 'strings', 'horn', 'electric']
   const foundInstruments = instruments.filter(i => lowerPrompt.includes(i))
   if (foundInstruments.length > 0) constraints.instruments = foundInstruments
 
@@ -94,7 +92,11 @@ function generateSearchQueries(prompt: string, constraints: ParsedConstraints): 
   const queries: string[] = []
   const lowerPrompt = prompt.toLowerCase()
 
-  const baseTerms = lowerPrompt.replace(/\b(rare|rari|raro)\b/gi, '').trim()
+  const baseTerms = lowerPrompt
+    .replace(/\b(rare|rari|raro|underground|obscure|deep)\b/gi, '')
+    .replace(/\b(ost|soundtrack)\b/gi, 'soundtrack')
+    .trim()
+  
   if (baseTerms) queries.push(baseTerms)
 
   if (constraints.genre?.length) {
@@ -102,9 +104,9 @@ function generateSearchQueries(prompt: string, constraints: ParsedConstraints): 
   }
 
   if (constraints.country && constraints.decade) {
-    queries.push(`${constraints.country} ${constraints.decade} music`)
+    queries.push(`${constraints.country} ${constraints.decade}`)
   } else if (constraints.decade) {
-    queries.push(`${constraints.decade} music`)
+    queries.push(`${constraints.decade}`)
   } else if (constraints.country) {
     queries.push(`${constraints.country} music`)
   }
@@ -117,7 +119,7 @@ function generateSearchQueries(prompt: string, constraints: ParsedConstraints): 
     queries.push(`${constraints.instruments[0]} ${constraints.genre?.[0] || 'music'}`)
   }
 
-  queries.push('underground obscure')
+  queries.push('underground rare')
 
   return Array.from(new Set(queries)).slice(0, 5)
 }
@@ -130,84 +132,21 @@ export async function planFromPrompt(prompt: string): Promise<Plan> {
   const constraints = extractConstraintsFromPrompt(prompt)
   const searchQueries = generateSearchQueries(prompt, constraints)
 
-  const systemPrompt = `You are a music curation AI assistant. Given a user's playlist request, analyze it and create a plan for finding rare, unique tracks that match their description.
-
-The user wants: "${prompt}"
-
-Your task is to output a JSON object with:
-{
-  "searchQueries": ["2-5 search queries to find relevant tracks"],
-  "seedTrackIds": ["leave empty array - we will find these from search results"],
-  "constraints": {
-    "bpmMin": number or null,
-    "bpmMax": number or null,  
-    "mood": ["array of mood keywords"],
-    "genre": ["array of genre keywords"],
-    "decade": "e.g., '1970s' or null",
-    "country": "e.g., 'Italy' or null",
-    "instruments": ["array of instruments"]
-  },
-  "reasoning": "2-3 sentences explaining your approach"
-}
-
-Focus on finding RARE and UNDERREPRESENTED tracks, not mainstream popular ones. Consider:
-- Less popular artists
-- Deep cuts from albums
-- Underground/indie tracks
-- International music
-- Obscure releases
-- B-sides and rarities`
-
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: 'Generate the playlist plan.' }
-      ],
-      model: 'llama-3.1-70b-versatile',
-      temperature: 0.7,
-      max_tokens: 1024,
-      response_format: { type: 'json_object' }
-    })
-
-    const responseText = completion.choices[0]?.message?.content || '{}'
-    const parsed = JSON.parse(responseText)
-
-    const validated = PlanSchema.parse({
-      searchQueries: parsed.searchQueries || searchQueries,
-      seedTrackIds: [],
-      constraints: {
-        bpmMin: constraints.bpmMin,
-        bpmMax: constraints.bpmMax,
-        mood: constraints.mood,
-        genre: constraints.genre,
-        decade: constraints.decade,
-        country: constraints.country,
-        instruments: constraints.instruments,
-      },
-      reasoning: parsed.reasoning || 'Plan generated based on prompt analysis.'
-    })
-
-    return validated
-  } catch (error) {
-    console.error('LLM planning failed, using fallback:', error)
-    
-    return {
-      searchQueries,
-      seedTrackIds: [],
-      constraints: constraints.bpmMin || constraints.bpmMax || constraints.genre?.length || constraints.mood?.length
-        ? {
-            bpmMin: constraints.bpmMin,
-            bpmMax: constraints.bpmMax,
-            mood: constraints.mood,
-            genre: constraints.genre,
-            decade: constraints.decade,
-            country: constraints.country,
-            instruments: constraints.instruments,
-          }
-        : undefined,
-      reasoning: 'Fallback plan using rule-based extraction.'
-    }
+  return {
+    searchQueries,
+    seedTrackIds: [],
+    constraints: constraints.bpmMin || constraints.bpmMax || constraints.genre?.length || constraints.mood?.length
+      ? {
+          bpmMin: constraints.bpmMin,
+          bpmMax: constraints.bpmMax,
+          mood: constraints.mood,
+          genre: constraints.genre,
+          decade: constraints.decade,
+          country: constraints.country,
+          instruments: constraints.instruments,
+        }
+      : undefined,
+    reasoning: 'Plan generated based on prompt analysis with rule-based extraction.'
   }
 }
 
