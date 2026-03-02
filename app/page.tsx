@@ -70,7 +70,8 @@ export default function HomePage() {
       showToast(`Found ${result.tracks.length} rare tracks!`, 'success')
     } catch (error) {
       console.error('Generation failed:', error)
-      showToast('Failed to generate playlist. Please try again.', 'error')
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      showToast(`Failed: ${errorMessage}`, 'error')
     } finally {
       setIsGenerating(false)
     }

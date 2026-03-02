@@ -41,26 +41,27 @@ export async function generatePlaylist(
 ): Promise<GenerateResult> {
   const { playlistLength, explorationMode, hop2Enabled, onProgress } = options
 
-  onProgress?.('planning', 0.05)
-  const plan = await planFromPrompt(prompt)
-  
-  const constraints = extractConstraintsFromPlan(plan)
+  try {
+    onProgress?.('planning', 0.05)
+    const plan = await planFromPrompt(prompt)
+    
+    const constraints = extractConstraintsFromPlan(plan)
 
-  onProgress?.('searching', 0.15)
-  let allTracks: HiFiTrack[] = []
-  
-  for (const query of plan.searchQueries.slice(0, 3)) {
-    try {
-      const results = await hiFiClient.search(query, 50)
-      allTracks.push(...results.tracks)
-    } catch (error) {
-      console.error(`Search failed for "${query}":`, error)
+    onProgress?.('searching', 0.15)
+    let allTracks: HiFiTrack[] = []
+    
+    for (const query of plan.searchQueries.slice(0, 3)) {
+      try {
+        const results = await hiFiClient.search(query, 50)
+        allTracks.push(...results.tracks)
+      } catch (error) {
+        console.error(`Search failed for "${query}":`, error)
+      }
     }
-  }
 
-  if (allTracks.length === 0) {
-    throw new Error('No tracks found. Try a different search term.')
-  }
+    if (allTracks.length === 0) {
+      throw new Error('No tracks found. The Hi-Fi API might be unavailable. Try again later.')
+    }
 
   onProgress?.('expanding', 0.4)
   const discoveryResult = await graphDiscovery(
@@ -143,6 +144,10 @@ export async function generatePlaylist(
     tracks: finalTracks,
     seedsUsed: discoveryResult.seedsUsed,
     totalRequests: discoveryResult.totalRequests,
+  }
+  } catch (error) {
+    console.error('generatePlaylist error:', error)
+    throw error
   }
 }
 
