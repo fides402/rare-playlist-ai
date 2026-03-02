@@ -4,15 +4,38 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
 }
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient()
+function getPrismaClient() {
+  if (globalForPrisma.prisma) {
+    return globalForPrisma.prisma
+  }
+  
+  const client = new PrismaClient({
+    datasources: {
+      db: {
+        url: process.env.DATABASE_URL || 'file:./dev.db'
+      }
+    }
+  })
+  
+  if (process.env.NODE_ENV !== 'production') {
+    globalForPrisma.prisma = client
+  }
+  
+  return client
+}
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+export const prisma = {
+  get client() {
+    return getPrismaClient()
+  }
+}
 
 export async function getOrCreateUser(userId: string) {
-  let user = await prisma.user.findUnique({ where: { id: userId } })
+  const client = prisma.client
+  let user = await client.user.findUnique({ where: { id: userId } })
   
   if (!user) {
-    user = await prisma.user.create({
+    user = await client.user.create({
       data: { id: userId }
     })
   }
@@ -27,9 +50,10 @@ export async function createPlaylist(
   description?: string,
   tracks?: Array<{ trackId: string; trackName: string; artistName: string; position: number; reason?: string }>
 ) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  const playlist = await prisma.playlist.create({
+  const playlist = await client.playlist.create({
     data: {
       name,
       prompt,
@@ -48,9 +72,10 @@ export async function createPlaylist(
 }
 
 export async function getUserPlaylists(userId: string) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  return prisma.playlist.findMany({
+  return client.playlist.findMany({
     where: { userId: user.id },
     include: {
       tracks: {
@@ -62,9 +87,10 @@ export async function getUserPlaylists(userId: string) {
 }
 
 export async function getPlaylistById(playlistId: string, userId: string) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  return prisma.playlist.findFirst({
+  return client.playlist.findFirst({
     where: {
       id: playlistId,
       userId: user.id
@@ -78,9 +104,10 @@ export async function getPlaylistById(playlistId: string, userId: string) {
 }
 
 export async function deletePlaylist(playlistId: string, userId: string) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  return prisma.playlist.deleteMany({
+  return client.playlist.deleteMany({
     where: {
       id: playlistId,
       userId: user.id
@@ -95,9 +122,10 @@ export async function addTrackFeedback(
   artistName: string,
   liked: boolean
 ) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  return prisma.trackFeedback.upsert({
+  return client.trackFeedback.upsert({
     where: {
       userId_trackId: {
         userId: user.id,
@@ -119,18 +147,20 @@ export async function addTrackFeedback(
 }
 
 export async function getUserFeedback(userId: string) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  return prisma.trackFeedback.findMany({
+  return client.trackFeedback.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: 'desc' }
   })
 }
 
 export async function getUserLikedTracks(userId: string) {
+  const client = prisma.client
   const user = await getOrCreateUser(userId)
   
-  return prisma.trackFeedback.findMany({
+  return client.trackFeedback.findMany({
     where: {
       userId: user.id,
       liked: true
