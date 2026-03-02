@@ -1,17 +1,120 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Search, Sparkles, Play, Pause, Heart, Save, Volume2, ListMusic, Loader2, Download, Trash2, SkipBack, SkipForward } from 'lucide-react'
-import { hiFiClient } from '@/lib/hifiClient'
-import { planFromPrompt, extractConstraintsFromPlan } from '@/lib/planner'
-import { rankTracks } from '@/lib/ranking'
-import { graphDiscovery, enrichTracksWithInfo } from '@/lib/graphDiscovery'
-import type { HiFiTrack } from '@/lib/hifiClient'
+
+interface HiFiTrack {
+  id: string
+  title: string
+  artist?: string
+  album?: string
+  duration?: number
+  popularity?: number
+  coverUrl?: string
+  previewUrl?: string
+  bpm?: number
+  key?: string
+}
 
 interface TrackWithScore extends HiFiTrack {
   rarityScore: number
   reason: string
   finalScore: number
+}
+
+function SearchIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+    </svg>
+  )
+}
+
+function SparklesIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>
+    </svg>
+  )
+}
+
+function PlayIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+  )
+}
+
+function PauseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+    </svg>
+  )
+}
+
+function HeartIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
+    </svg>
+  )
+}
+
+function SaveIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+    </svg>
+  )
+}
+
+function ListMusicIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/>
+    </svg>
+  )
+}
+
+function DownloadIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+    </svg>
+  )
+}
+
+function SkipBackIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  )
+}
+
+function SkipForwardIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  )
+}
+
+function LoaderIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
+  )
 }
 
 export default function HomePage() {
@@ -29,10 +132,15 @@ export default function HomePage() {
   const [toasts, setToasts] = useState<{id: number, message: string, type: string}[]>([])
   const [currentTrack, setCurrentTrack] = useState<HiFiTrack | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isClient, setIsClient] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    setIsClient(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isClient) return
     
     const stored = localStorage.getItem('rareplaylist_userId')
     if (stored) {
@@ -47,7 +155,7 @@ export default function HomePage() {
       const saved = localStorage.getItem('rareplaylist_playlists')
       if (saved) setSavedPlaylists(JSON.parse(saved))
     } catch {}
-  }, [])
+  }, [isClient])
 
   const showToast = (message: string, type: string = 'info') => {
     const id = Date.now()
@@ -65,20 +173,34 @@ export default function HomePage() {
     setTracks([])
 
     try {
+      const { hiFiClient } = await import('@/lib/hifiClient')
+      const { planFromPrompt, extractConstraintsFromPlan } = await import('@/lib/planner')
+      const { rankTracks } = await import('@/lib/ranking')
+      const { graphDiscovery, enrichTracksWithInfo } = await import('@/lib/graphDiscovery')
+
       const plan = await planFromPrompt(prompt)
+      console.log('Plan:', plan)
+      
       const constraints = extractConstraintsFromPlan(plan)
 
       let allTracks: HiFiTrack[] = []
       
       for (const query of plan.searchQueries.slice(0, 3)) {
         try {
+          console.log('Searching for:', query)
           const results = await hiFiClient.search(query, 50)
+          console.log('Results for', query, ':', results.tracks.length)
           allTracks.push(...results.tracks)
-        } catch (e) {}
+        } catch (e: any) {
+          console.error('Search error for', query, ':', e.message)
+        }
       }
 
+      console.log('Total tracks found:', allTracks.length)
+
       if (allTracks.length === 0) {
-        throw new Error('No tracks found')
+        showToast('No tracks found. Check console for details.', 'error')
+        return
       }
 
       const discoveryResult = await graphDiscovery(allTracks, {
@@ -116,8 +238,6 @@ export default function HomePage() {
   }
 
   const playTrack = (track: TrackWithScore) => {
-    if (typeof window === 'undefined') return
-    
     if (!audioRef.current) {
       audioRef.current = new Audio()
     }
@@ -159,15 +279,12 @@ export default function HomePage() {
     
     const updated = [playlist, ...savedPlaylists]
     setSavedPlaylists(updated)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('rareplaylist_playlists', JSON.stringify(updated))
-    }
+    localStorage.setItem('rareplaylist_playlists', JSON.stringify(updated))
     showToast('Saved!', 'success')
     setShowSaveModal(false)
   }
 
   const handleLike = (track: TrackWithScore) => {
-    if (typeof window === 'undefined') return
     let feedback: any[] = []
     try {
       feedback = JSON.parse(localStorage.getItem('rareplaylist_feedback') || '[]')
@@ -194,17 +311,28 @@ export default function HomePage() {
   const handleDelete = (id: string) => {
     const updated = savedPlaylists.filter(p => p.id !== id)
     setSavedPlaylists(updated)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('rareplaylist_playlists', JSON.stringify(updated))
-    }
+    localStorage.setItem('rareplaylist_playlists', JSON.stringify(updated))
     showToast('Deleted', 'info')
   }
 
+  if (!isClient) {
+    return (
+      <div style={{ background: '#000', color: '#fff', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center' }}>
+          <LoaderIcon />
+          <p style={{ marginTop: '16px', color: '#a0a0a0' }}>Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', paddingBottom: currentTrack ? '180px' : '40px' }}>
-      {typeof window !== 'undefined' && <audio ref={audioRef} onEnded={() => setIsPlaying(false)} />}
+    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', paddingBottom: currentTrack ? '100px' : '40px' }}>
+      {isClient && <audio ref={audioRef} onEnded={() => setIsPlaying(false)} />}
       
       <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
             <h1 style={{ fontSize: '32px', fontWeight: 'bold', margin: 0 }}>
@@ -216,7 +344,7 @@ export default function HomePage() {
             onClick={() => setShowPlaylists(!showPlaylists)}
             style={{ background: '#0a0a0a', color: '#fff', border: '1px solid #222', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
           >
-            <ListMusic size={16} />
+            <ListMusicIcon />
             My Playlists ({savedPlaylists.length})
           </button>
         </div>
@@ -226,7 +354,9 @@ export default function HomePage() {
             <div style={{ background: '#0a0a0a', borderRadius: '16px', padding: '16px', border: '1px solid #222', marginBottom: '20px' }}>
               <div style={{ display: 'flex', gap: '12px' }}>
                 <div style={{ flex: 1, position: 'relative' }}>
-                  <Search style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#606060' }} size={20} />
+                  <div style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#606060' }}>
+                    <SearchIcon />
+                  </div>
                   <input
                     type="text"
                     value={prompt}
@@ -241,7 +371,7 @@ export default function HomePage() {
                   disabled={isGenerating}
                   style={{ background: '#00ff88', color: '#000', border: 'none', borderRadius: '12px', padding: '16px 24px', fontWeight: 'bold', cursor: isGenerating ? 'not-allowed' : 'pointer', opacity: isGenerating ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
-                  {isGenerating ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
+                  {isGenerating ? <LoaderIcon /> : <SparklesIcon />}
                   Generate
                 </button>
               </div>
@@ -286,8 +416,8 @@ export default function HomePage() {
                     onClick={() => setShowSaveModal(true)}
                     style={{ background: '#0a0a0a', color: '#fff', border: '1px solid #222', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer' }}
                   >
-                    <Save size={16} style={{ display: 'inline', marginRight: '6px' }} />
-                    Save
+                    <SaveIcon />
+                    <span style={{ marginLeft: '6px' }}>Save</span>
                   </button>
                 </div>
 
@@ -307,7 +437,7 @@ export default function HomePage() {
                       }}
                     >
                       <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        {currentTrack?.id === track.id && isPlaying ? <Pause size={18} color="#00ff88" /> : <Play size={18} color="#00ff88" />}
+                        {currentTrack?.id === track.id && isPlaying ? <PauseIcon /> : <PlayIcon />}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: '500', color: currentTrack?.id === track.id ? '#00ff88' : '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -321,7 +451,7 @@ export default function HomePage() {
                         onClick={(e) => { e.stopPropagation(); handleLike(track) }}
                         style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px' }}
                       >
-                        <Heart size={16} color="#a0a0a0" />
+                        <HeartIcon />
                       </button>
                     </div>
                   ))}
@@ -331,7 +461,9 @@ export default function HomePage() {
 
             {tracks.length === 0 && !isGenerating && (
               <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-                <Sparkles size={48} color="#606060" style={{ margin: '0 auto 16px' }} />
+                <div style={{ color: '#606060', margin: '0 auto 16px' }}>
+                  <SparklesIcon />
+                </div>
                 <p style={{ color: '#a0a0a0' }}>Enter a description and generate your rare playlist</p>
               </div>
             )}
@@ -347,7 +479,9 @@ export default function HomePage() {
             
             {savedPlaylists.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px' }}>
-                <ListMusic size={48} color="#606060" style={{ margin: '0 auto 16px' }} />
+                <div style={{ color: '#606060', margin: '0 auto 16px' }}>
+                  <ListMusicIcon />
+                </div>
                 <p style={{ color: '#a0a0a0' }}>No playlists yet</p>
               </div>
             ) : (
@@ -362,10 +496,10 @@ export default function HomePage() {
                       </div>
                       <div style={{ display: 'flex', gap: '8px' }}>
                         <button onClick={() => handleExport(playlist)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px' }}>
-                          <Download size={18} color="#a0a0a0" />
+                          <DownloadIcon />
                         </button>
                         <button onClick={() => handleDelete(playlist.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px' }}>
-                          <Trash2 size={18} color="#a0a0a0" />
+                          <TrashIcon />
                         </button>
                       </div>
                     </div>
@@ -381,7 +515,7 @@ export default function HomePage() {
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#0a0a0a', borderTop: '1px solid #222', padding: '12px 20px' }}>
           <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
             <div style={{ width: '48px', height: '48px', borderRadius: '8px', background: '#1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <ListMusic size={24} color="#606060" />
+              <ListMusicIcon />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentTrack.title}</div>
@@ -389,16 +523,16 @@ export default function HomePage() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <button onClick={() => audioRef.current && (audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10))}>
-                <SkipBack size={20} color="#fff" />
+                <SkipBackIcon />
               </button>
               <button
                 onClick={() => isPlaying ? audioRef.current?.pause() : audioRef.current?.play()}
                 style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#00ff88', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
               >
-                {isPlaying ? <Pause size={20} color="#000" /> : <Play size={20} color="#000" style={{ marginLeft: '2px' }} />}
+                {isPlaying ? <PauseIcon /> : <PlayIcon />}
               </button>
               <button onClick={() => audioRef.current && (audioRef.current.currentTime += 10)}>
-                <SkipForward size={20} color="#fff" />
+                <SkipForwardIcon />
               </button>
             </div>
           </div>
@@ -448,11 +582,6 @@ export default function HomePage() {
           </div>
         </div>
       )}
-
-      <style jsx global>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .animate-spin { animation: spin 1s linear infinite; }
-      `}</style>
     </div>
   )
 }
