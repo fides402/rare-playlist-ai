@@ -1,7 +1,19 @@
 'use client'
 
 import React, { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react'
-import { type HiFiTrack } from '@/lib/hifiClient'
+
+interface HiFiTrack {
+  id: string
+  title: string
+  artist?: string
+  album?: string
+  duration?: number
+  popularity?: number
+  coverUrl?: string
+  previewUrl?: string
+  bpm?: number
+  key?: string
+}
 
 interface PlayerState {
   currentTrack: HiFiTrack | null
@@ -31,13 +43,6 @@ interface PlayerContextType extends PlayerState {
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined)
 
-const QUALITY_FALLBACKS: Record<string, string[]> = {
-  max: ['max', 'high', 'medium', 'low'],
-  high: ['high', 'medium', 'low'],
-  medium: ['medium', 'low'],
-  low: ['low'],
-}
-
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [state, setState] = useState<PlayerState>({
@@ -53,7 +58,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   })
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && !audioRef.current) {
+    if (typeof window === 'undefined') return
+    
+    try {
       audioRef.current = new Audio()
       audioRef.current.volume = state.volume
       
@@ -69,7 +76,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       audioRef.current.addEventListener('ended', () => {
         setState(prev => ({ ...prev, isPlaying: false }))
-        next()
       })
 
       audioRef.current.addEventListener('play', () => {
@@ -87,18 +93,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       audioRef.current.addEventListener('canplay', () => {
         setState(prev => ({ ...prev, isLoading: false }))
       })
+    } catch (e) {
+      console.error('Audio init error:', e)
+    }
 
-      const handleVisibilityChange = () => {
-        if (document.hidden && state.isPlaying && audioRef.current) {
-          audioRef.current.play().catch(console.error)
-        }
-      }
-
-      document.addEventListener('visibilitychange', handleVisibilityChange)
-
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange)
-        audioRef.current?.pause()
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause()
         audioRef.current = null
       }
     }
@@ -115,13 +116,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         progress: 0,
       }))
 
-      const qualities = QUALITY_FALLBACKS[state.quality]
-      let audioSrc = track.previewUrl
-
-      if (!audioSrc) {
-        audioSrc = `https://api.monochrome.tf/stream/${track.id}`
-      }
-
+      const audioSrc = track.previewUrl || `https://api.monochrome.tf/stream/${track.id}`
       audioRef.current.src = audioSrc
       audioRef.current.load()
       
@@ -137,7 +132,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         console.error('Playback failed:', error)
       }
     }
-  }, [state.quality, state.currentTrack])
+  }, [state.currentTrack])
 
   const pause = useCallback(() => {
     audioRef.current?.pause()
