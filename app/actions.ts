@@ -11,7 +11,6 @@ interface GenerateOptions {
   playlistLength: number
   explorationMode: number
   hop2Enabled: boolean
-  onProgress?: (step: string, progress: number) => void
 }
 
 interface GenerateResult {
@@ -39,15 +38,12 @@ export async function generatePlaylist(
   userId: string,
   options: GenerateOptions
 ): Promise<GenerateResult> {
-  const { playlistLength, explorationMode, hop2Enabled, onProgress } = options
+  const { playlistLength, explorationMode, hop2Enabled } = options
 
   try {
-    onProgress?.('planning', 0.05)
     const plan = await planFromPrompt(prompt)
-    
     const constraints = extractConstraintsFromPlan(plan)
 
-    onProgress?.('searching', 0.15)
     let allTracks: HiFiTrack[] = []
     
     for (const query of plan.searchQueries.slice(0, 3)) {
@@ -60,91 +56,78 @@ export async function generatePlaylist(
     }
 
     if (allTracks.length === 0) {
-      throw new Error('No tracks found. The Hi-Fi API might be unavailable. Try again later.')
+      throw new Error('No tracks found. The Hi-Fi API might be unavailable.')
     }
 
-  onProgress?.('expanding', 0.4)
-  const discoveryResult = await graphDiscovery(
-    allTracks,
-    {
-      maxSeeds: 8,
-      maxRecsPerSeed: 25,
-      maxHop2Seeds: hop2Enabled ? 3 : 0,
-      maxTotalRequests: 40,
-      enableHop2: hop2Enabled,
-    },
-    (step, progress) => {
-      const adjustedProgress = 0.4 + progress * 0.3
-      onProgress?.(step, adjustedProgress)
-    }
-  )
+    const discoveryResult = await graphDiscovery(
+      allTracks,
+      {
+        maxSeeds: 8,
+        maxRecsPerSeed: 25,
+        maxHop2Seeds: hop2Enabled ? 3 : 0,
+        maxTotalRequests: 40,
+        enableHop2: hop2Enabled,
+      }
+    )
 
-  onProgress?.('enriching', 0.75)
-  let enrichedTracks = discoveryResult.tracks
-  
-  if (discoveryResult.tracks.length > 10) {
-    try {
-      enrichedTracks = await enrichTracksWithInfo(
-        discoveryResult.tracks,
-        15,
-        (progress) => onProgress?.('enriching', 0.75 + progress * 0.1)
-      )
-    } catch (error) {
-      console.error('Enrichment failed:', error)
-    }
-  }
-
-  onProgress?.('ranking', 0.9)
-  let userProfile: UserProfile | undefined
-  
-  try {
-    const feedback = await getUserFeedback(userId)
-    if (feedback.length > 0) {
-      userProfile = createInitialProfile(userId)
-      for (const f of feedback) {
-        updateProfileWithFeedback(userProfile, {
-          id: f.trackId,
-          title: f.trackName,
-          artist: f.artistName,
-        }, f.liked)
+    let enrichedTracks = discoveryResult.tracks
+    
+    if (discoveryResult.tracks.length > 10) {
+      try {
+        enrichedTracks = await enrichTracksWithInfo(discoveryResult.tracks, 15)
+      } catch (error) {
+        console.error('Enrichment failed:', error)
       }
     }
-  } catch (error) {
-    console.error('Failed to load user profile:', error)
-  }
 
-  const rankedTracks = rankTracks(
-    enrichedTracks,
-    constraints,
-    userProfile,
-    explorationMode
-  )
+    let userProfile: UserProfile | undefined
+    
+    try {
+      const feedback = await getUserFeedback(userId)
+      if (feedback.length > 0) {
+        userProfile = createInitialProfile(userId)
+        for (const f of feedback) {
+          updateProfileWithFeedback(userProfile, {
+            id: f.trackId,
+            title: f.trackName,
+            artist: f.artistName,
+          }, f.liked)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load user profile:', error)
+    }
 
-  const finalTracks = rankedTracks
-    .slice(0, playlistLength)
-    .map(track => ({
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      album: track.album,
-      duration: track.duration,
-      popularity: track.popularity,
-      coverUrl: track.coverUrl,
-      previewUrl: track.previewUrl,
-      bpm: track.bpm,
-      key: track.key,
-      rarityScore: track.rarityScore,
-      reason: track.reason,
-      finalScore: track.finalScore,
-    }))
+    const rankedTracks = rankTracks(
+      enrichedTracks,
+      constraints,
+      userProfile,
+      explorationMode
+    )
 
-  onProgress?.('complete', 1)
+    const finalTracks = rankedTracks
+      .slice(0, playlistLength)
+      .map(track => ({
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        duration: track.duration,
+        popularity: track.popularity,
+        coverUrl: track.coverUrl,
+        previewUrl: track.previewUrl,
+        bpm: track.bpm,
+        key: track.key,
+        rarityScore: track.rarityScore,
+        reason: track.reason,
+        finalScore: track.finalScore,
+      }))
 
-  return {
-    tracks: finalTracks,
-    seedsUsed: discoveryResult.seedsUsed,
-    totalRequests: discoveryResult.totalRequests,
-  }
+    return {
+      tracks: finalTracks,
+      seedsUsed: discoveryResult.seedsUsed,
+      totalRequests: discoveryResult.totalRequests,
+    }
   } catch (error) {
     console.error('generatePlaylist error:', error)
     throw error

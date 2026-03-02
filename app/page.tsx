@@ -58,10 +58,6 @@ export default function HomePage() {
           playlistLength,
           explorationMode,
           hop2Enabled,
-          onProgress: (step, value) => {
-            setProgress(step)
-            setProgressValue(value)
-          }
         }
       )
 
