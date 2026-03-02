@@ -2,32 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #000000;
-  --surface: #0a0a0a;
-  --surface-hover: #141414;
-  --surface-active: #1a1a1a;
-  --primary: #00ff88;
-  --primary-hover: #00cc6a;
-  --secondary: #ff3366;
-  --text-primary: #ffffff;
-  --text-secondary: #a0a0a0;
-  --text-muted: #606060;
-  --border: #222222;
-}
-
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 html,
 body {
-  background: var(--background);
-  color: var(--text-primary);
+  background: #000000;
+  color: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
 }
+
+.bg-background { background-color: #000000; }
+.bg-surface { background-color: #0a0a0a; }
+.bg-surface-hover:hover { background-color: #141414; }
+.bg-surface-active { background-color: #1a1a1a; }
+.bg-primary { background-color: #00ff88; }
+.bg-primary-hover:hover { background-color: #00cc6a; }
+.text-white { color: #ffffff; }
+.text-primary { color: #00ff88; }
+.text-text-secondary { color: #a0a0a0; }
+.text-text-muted { color: #606060; }
+.text-black { color: #000000; }
+.border-border { border-color: #222222; }
+.hover\:bg-surface-hover:hover { background-color: #141414; }
+.hover\:bg-surface-active:hover { background-color: #1a1a1a; }
+.hover\:bg-primary-hover:hover { background-color: #00cc6a; }
+.focus\:ring-primary:focus { --tw-ring-color: #00ff88; }
+.accent-primary { accent-color: #00ff88; }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
