@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
-import { PlayerProvider } from '@/components/PlayerContext'
-import { Toaster } from '@/components/ui/Toaster'
+import { Providers } from '@/components/Providers'
 
 export const metadata: Metadata = {
   title: 'RarePlaylistAI',
@@ -16,10 +15,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen bg-background">
-        <PlayerProvider>
+        <Providers>
           {children}
-          <Toaster />
-        </PlayerProvider>
+        </Providers>
       </body>
     </html>
   )
